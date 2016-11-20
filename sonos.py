@@ -78,7 +78,6 @@ class SonosInfo(object):
         self.queue(keyword)
         try:
           self.zone.play_from_queue(0)
-          print("Currently playing: ", self.zone.get_current_track_info()['title'])
         except:
           print("Could not play song.")
         # Append original queue
@@ -87,18 +86,17 @@ class SonosInfo(object):
         time.sleep(0.1)
 
     def queue(self, keyword=None):
-        if keyword == None:
-            for i, item in enumerate(self.zone.get_queue()[1:]):
-                if i == 0: print("Next up:")
-                print("  ", item.title)
-        else:
+        if keyword != None:
             # Add current uris to queue
             formatted = [os.path.join( *[quote(part) for part in os.path.split(file_)])
                          for file_ in self.list_files(keyword)['paths']]
             for path in formatted:
                 netpath = 'http://{}:{}/{}'.format(self.machine_ip, self.port, path)
-                print('\nAdding file:', netpath)
                 self.zone.add_uri_to_queue(netpath)
+            print("Added", len(formatted), "tracks to the queue.")
+        for i, item in enumerate(self.zone.get_queue()[1:]):
+            if i == 0: print("Next up:")
+            print("  ", item.title)
 
 
     def clear(self, keyword=None):
