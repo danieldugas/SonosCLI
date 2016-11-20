@@ -31,6 +31,7 @@ class SonosInfo(object):
         self.port = 1337
         self.zone_name = 'Foyer'
         self.directory = '.'
+        self.streaming = False
         for zone in soco.discover():
             if zone.player_name == self.zone_name:
                 print(self.zone_name)
@@ -109,6 +110,7 @@ class SonosInfo(object):
     def pause(self):
         self.zone.pause()
         time.sleep(0.1)
+        self.streaming = False
 
     def set_volume(self, vol):
         self.zone.volume = vol
@@ -117,6 +119,13 @@ class SonosInfo(object):
     def stop(self):
         self.zone.stop()
         time.sleep(0.1)
+        self.streaming = False
+
+    def stream(self, stream_path="darkice.mp3"):
+        netpath = 'http://{}:{}/{}'.format(self.machine_ip, self.port, stream_path)
+        self.zone.play_uri(netpath)
+        print(netpath)
+        self.streaming = True
 
 
 
@@ -132,41 +141,55 @@ with open(log_path, 'r') as file_:
         raise ValueError("Server address already in use")
 
 
-def show_status():
-   for _ in range(10):
-       print("\n")
-   print("""
-Welcome to Daniel's SONOS server.
-------------------------------------
-How may I help you today?
+def show_status(sf):
+    while True:
+        try:
+            track_info = sf.zone.get_current_track_info()
+            transport_info = sf.zone.get_current_transport_info()
+            queue = sf.zone.get_queue()
+            for _ in range(10):
+                print("\n")
+            print("""
+    Welcome to Daniel's SONOS server.
+    ------------------------------------
+    How may I help you today?
 
-vol      set volume level
-list     list available music
-play     play a music file
-stop     stop playing audio
-queue    add music to queue
-clear    clear queue
-resume   resume track
-pause    pause track
-------------------------------------
-""")
-   try:
-       track_info = sf.zone.get_current_track_info()
-       print("Current track [" + sf.zone.get_current_transport_info()['current_transport_state'] + "]:",
-             track_info['title'])
-       print("")
-       for item in sf.zone.get_queue()[1:2]:
-           print("Next up:")
-           print("  ", item.title)
-   except:
-       print("")
+    vol      set volume level
+    list     list available music
+    play     play a music file
+    stop     stop playing audio
+    queue    add music to queue
+    clear    clear queue
+    resume   resume track
+    pause    pause track
+    ------------------------------------
+    """)
+            print("Current track [" + transport_info['current_transport_state'] + "]:",
+                  track_info['title'], "      ", track_info['position'], "/", track_info['duration'])
+            print("")
+            for item in queue[1:2]:
+                print("Next up:")
+                print("  ", item.title)
+            print(">>", end='')
+        except KeyboardInterrupt:
+            break
+        except:
+            print("")
+
+        if sf.streaming: sf.resume()
+        try:
+            time.sleep(0.1)
+        except KeyboardInterrupt:
+            break
+
 
 try:
+    from multiprocessing import Process
+    p = Process(target=show_status, args=(sf,))
+    p.start()
 #     sf.play_random_file()
-    show_status()
     while True:
        keys = raw_input(" >>")
-       show_status()
        cmd = keys.split(' ', 1) + [None]
        if cmd[0] == "vol":
            print("Current volume:", sf.zone.volume)
@@ -178,17 +201,16 @@ try:
            sf.play(cmd[1])
        elif cmd[0] == "stop":
            sf.stop()
-           show_status()
        elif cmd[0] == "queue":
            sf.queue(cmd[1])
        elif cmd[0] == "clear":
            sf.clear()
        elif cmd[0] == "resume":
            sf.resume()
-           show_status()
        elif cmd[0] == "pause":
            sf.pause()
-           show_status()
+       elif cmd[0] == "stream":
+           sf.stream()
        else:
            print("Unknown command: '"+ keys+ "'.")
 except KeyboardInterrupt:
@@ -198,7 +220,9 @@ except:
 finally:
     sf.stop()
     daemon.terminate()
+    p.join()
 
 sf.stop()
 daemon.terminate()
+p.join()
 
