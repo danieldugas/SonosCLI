@@ -37,48 +37,88 @@ class SonosInfo(object):
                 self.zone = zone
                 break
 
-    def list_files(self):
+    def list_files(self, keyword=None, verbose=False):
+        # Populate list
         music_files = []
-        print('Looking for music files')
         for path, dirs, files in os.walk(self.directory):
-            for file_ in files:
-                if os.path.splitext(file_)[1].startswith('.mp3'):
-                    music_files.append(os.path.relpath(os.path.join(path, file_)))
-                    print('Found:', music_files[-1])
-
-    def find_file(self, name=None):
-        music_files = []
-        print('Looking for music files')
-        for path, dirs, files in os.walk(self.directory):
-            for file_ in files:
-                if os.path.splitext(file_)[1].startswith('.mp3'):
-                    if name != None:
-                        if name in file_:
-                            result = os.path.relpath(os.path.join(path, file_))
-                    else:
+                for file_ in files:
+                    if os.path.splitext(file_)[1].startswith('.mp3'):
                         music_files.append(os.path.relpath(os.path.join(path, file_)))
-                        random_file = choice(music_files)
-                        # urlencode all the path parts (but not the /'s)
-                        result = os.path.join( *[quote(part) for part in os.path.split(random_file)])
-        print('Found: ', result)
-        return result
+        ids = list(range(len(music_files)))
+        # Filter list
+        if keyword != None:
+            if keyword.isdigit():
+                music_files = [music_files[ids.index(int(keyword))]]
+                ids = [ids[ids.index(int(keyword))]]
+            else:
+                ids_filtered = [id_ for id_, file_ in zip(ids, music_files) 
+                                if keyword in file_]
+                music_files_filtered = [file_ for id_, file_ in zip(ids, music_files) 
+                                        if keyword in file_]
+                ids = ids_filtered
+                music_files = music_files_filtered
+        # Print list
+        if verbose:
+            for id_, music_file in zip(ids, music_files):
+                print(id_, ') ', music_file)
+            if len(ids) == 0: print("File containing", keyword, "not found")
+        return {'ids': ids, 'paths': music_files}
 
-    def play_random_file(self):
-        """Add a random non-py file from this folder and subfolders to soco"""
-        netpath = 'http://{}:{}/{}'.format(self.machine_ip, self.port, self.find_file())
-        print('\nPlaying random file:', netpath)
-        self.zone.play_uri(netpath)
+    def list(self, keyword=None):
+        self.list_files(keyword=keyword, verbose=True)
 
-    def play_file(self):
-        netpath = 'http://{}:{}/{}'.format(self.machine_ip, self.port, self.find_file(name))
-        print('\nPlaying file:', netpath)
-        self.zone.play_uri(netpath)
+    def play(self, keyword=None):
+        if keyword == None:
+            import random
+            keyword = str(random.choice(self.list_files(verbose=False)['ids']))
+        # Clear queue but save it for later
+        queue = self.zone.get_queue()
+        self.zone.clear_queue()
+        # Add current uris to queue
+        self.queue(keyword)
+        try:
+          self.zone.play_from_queue(0)
+          print("Currently playing: ", self.zone.get_current_track_info()['title'])
+        except:
+          print("Could not play song.")
+        # Append original queue
+        for item in queue[1:]:
+            self.zone.add_to_queue(item)
+        time.sleep(0.1)
+
+    def queue(self, keyword=None):
+        if keyword == None:
+            for i, item in enumerate(self.zone.get_queue()[1:]):
+                if i == 0: print("Next up:")
+                print("  ", item.title)
+        else:
+            # Add current uris to queue
+            formatted = [os.path.join( *[quote(part) for part in os.path.split(file_)])
+                         for file_ in self.list_files(keyword)['paths']]
+            for path in formatted:
+                netpath = 'http://{}:{}/{}'.format(self.machine_ip, self.port, path)
+                print('\nAdding file:', netpath)
+                self.zone.add_uri_to_queue(netpath)
+
+
+    def clear(self, keyword=None):
+        self.zone.clear_queue()
+
+    def resume(self):
+        self.zone.play()
+        time.sleep(0.1)
+
+    def pause(self):
+        self.zone.pause()
+        time.sleep(0.1)
 
     def set_volume(self, vol):
         self.zone.volume = vol
+        print("Volume set to", vol)
 
     def stop(self):
         self.zone.stop()
+        time.sleep(0.1)
 
 
 
@@ -94,36 +134,72 @@ with open(log_path, 'r') as file_:
         raise ValueError("Server address already in use")
 
 
+def show_status():
+   for _ in range(10):
+       print("\n")
+   print("""
+Welcome to Daniel's SONOS server.
+------------------------------------
+How may I help you today?
+
+vol      set volume level
+list     list available music
+play     play a music file
+stop     stop playing audio
+queue    add music to queue
+clear    clear queue
+resume   resume track
+pause    pause track
+------------------------------------
+""")
+   try:
+       track_info = sf.zone.get_current_track_info()
+       print("Current track [" + sf.zone.get_current_transport_info()['current_transport_state'] + "]:",
+             track_info['title'])
+       print("")
+       for item in sf.zone.get_queue()[1:2]:
+           print("Next up:")
+           print("  ", item.title)
+   except:
+       print("")
+
 try:
 #     sf.play_random_file()
+    show_status()
     while True:
-       for _ in range(10):
-           print("\n")
-       keys = raw_input(
-       """Welcome to Daniel's SONOS server.
-       ------------------------------------
-       How may I help you today?
-
-       vol      set volume level
-       list     list available music
-       play     play a music file
-       stop     stop playing audio
-       ------------------------------------
-
-       >>""")
-       if keys == "vol":
+       keys = raw_input(" >>")
+       show_status()
+       cmd = keys.split(' ', 1) + [None]
+       if cmd[0] == "vol":
+           print("Current volume:", sf.zone.volume)
            vol = raw_input("Desired volume level [1-100]: ")
            sf.set_volume(vol)
-       if keys == "list":
-           sf.list_files()
-       if keys == "play":
-           sf.play_random_file()
-       if keys == "stop":
+       elif cmd[0] == "list":
+           sf.list(cmd[1])
+       elif cmd[0] == "play":
+           sf.play(cmd[1])
+       elif cmd[0] == "stop":
            sf.stop()
+           show_status()
+       elif cmd[0] == "queue":
+           sf.queue(cmd[1])
+       elif cmd[0] == "clear":
+           sf.clear()
+       elif cmd[0] == "resume":
+           sf.resume()
+           show_status()
+       elif cmd[0] == "pause":
+           sf.pause()
+           show_status()
+       else:
+           print("Unknown command: '"+ keys+ "'.")
 except KeyboardInterrupt:
     print("Exiting.")
 except:
-    print("Could not read keys")
+    raise
+finally:
+    sf.stop()
+    daemon.terminate()
 
 sf.stop()
 daemon.terminate()
