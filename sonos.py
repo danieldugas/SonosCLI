@@ -12,8 +12,11 @@ from __future__ import print_function, unicode_literals
 
 import os
 import time
+import urllib
 from random import choice
-from subprocess import Popen
+from subprocess import Popen, call
+from multiprocessing import Process
+from threading import Thread
 try:
     # Python 3
     from urllib.parse import quote
@@ -25,18 +28,22 @@ except ImportError:
 
 import soco
 
+MY_IP = raw_input("What's my IP address?\n>>")
+if MY_IP == '': MY_IP = '172.22.22.57'
+
 class SonosInfo(object):
-    def __init__(self):
-        self.machine_ip = '192.168.0.13'
+    def __init__(self,ip):
+        self.machine_ip = ip
         self.port = 1337
         self.zone_name = 'Foyer'
         self.directory = '.'
         self.streaming = False
         for zone in soco.discover():
+            self.zone = zone
             if zone.player_name == self.zone_name:
-                print(self.zone_name)
-                self.zone = zone
                 break
+        self.zone_name = self.zone.player_name
+        print(self.zone_name)
 
     def list_files(self, keyword=None, verbose=False):
         # Populate list
@@ -79,22 +86,23 @@ class SonosInfo(object):
         self.queue(keyword)
         try:
           self.zone.play_from_queue(0)
-        except:
+        except Exception as exc:
           print("Could not play song.")
+          print(exc)
         # Append original queue
         for item in queue[1:]:
             self.zone.add_to_queue(item)
-        time.sleep(0.1)
 
     def queue(self, keyword=None):
         if keyword != None:
             # Add current uris to queue
-            formatted = [os.path.join( *[quote(part) for part in os.path.split(file_)])
-                         for file_ in self.list_files(keyword)['paths']]
-            for path in formatted:
-                netpath = 'http://{}:{}/{}'.format(self.machine_ip, self.port, path)
+            tracks = self.list_files(keyword)['paths']
+            for path in tracks:
+                quote_path = urllib.quote(path)
+                netpath = 'http://{}:{}/{}'.format(self.machine_ip, self.port, quote_path)
+                print(netpath)
                 self.zone.add_uri_to_queue(netpath)
-            print("Added", len(formatted), "tracks to the queue.")
+            print("Added", len(tracks), "tracks to the queue.")
         for i, item in enumerate(self.zone.get_queue()[1:]):
             if i == 0: print("Next up:")
             print("  ", item.title)
@@ -105,12 +113,9 @@ class SonosInfo(object):
 
     def resume(self):
         self.zone.play()
-        time.sleep(0.1)
 
     def pause(self):
         self.zone.pause()
-        time.sleep(0.1)
-        self.streaming = False
 
     def set_volume(self, vol):
         self.zone.volume = vol
@@ -118,7 +123,6 @@ class SonosInfo(object):
 
     def stop(self):
         self.zone.stop()
-        time.sleep(0.1)
         self.streaming = False
 
     def stream(self, stream_path="darkice.mp3"):
@@ -131,7 +135,7 @@ class SonosInfo(object):
 
 
 
-sf = SonosInfo()
+sf = SonosInfo(MY_IP)
 
 log_path = "/tmp/daemon_log.txt"; log = open(log_path, 'wb')
 daemon = Popen(["python","daemon.py",str(sf.port)], stdout=log, stderr=log)
@@ -142,14 +146,27 @@ with open(log_path, 'r') as file_:
 
 
 def show_status(sf):
+    global FLAGS
     while True:
+        break
         try:
             track_info = sf.zone.get_current_track_info()
             transport_info = sf.zone.get_current_transport_info()
             queue = sf.zone.get_queue()
-            for _ in range(10):
-                print("\n")
-            print("""
+            try:
+                sf.resume()
+            except:
+                print("", end='')
+        except KeyboardInterrupt:
+            break
+#         except Exception as exp:
+#             raise exp
+#             print(exp)
+#             print("")
+
+        for _ in range(10):
+            print("\n")
+        print("""
     Welcome to Daniel's SONOS server.
     ------------------------------------
     How may I help you today?
@@ -164,28 +181,43 @@ def show_status(sf):
     pause    pause track
     ------------------------------------
     """)
-            print("Current track [" + transport_info['current_transport_state'] + "]:",
-                  track_info['title'], "      ", track_info['position'], "/", track_info['duration'])
-            print("")
-            for item in queue[1:2]:
-                print("Next up:")
-                print("  ", item.title)
-            print(">>", end='')
-        except KeyboardInterrupt:
-            break
-        except:
-            print("")
+        denom = "stream" if sf.streaming else "track"
+        print("Current",denom,"[" + transport_info['current_transport_state'] + "]:",
+              track_info['title'], "      ", track_info['position'], "/", track_info['duration'])
+        print("")
+        for item in queue[1:2]:
+            print("Next up:")
+            print("  ", item.title)
 
-        if sf.streaming: sf.resume()
+        print(FLAGS)
+        print(">>", end='')
+
         try:
             time.sleep(0.1)
+            while True:
+                if FLAGS['pause']:
+                    time.sleep(1)
+                else:
+                    break
+                if FLAGS['wait']:
+                    time.sleep(5)
+                    FLAGS['wait'] = False
+                    break
+                if FLAGS['end']:
+                    raise KeyboardInterrupt
         except KeyboardInterrupt:
             break
 
+def pause_status_until_enter():
+    global FLAGS
+    FLAGS['pause'] = True
+    raw_input("...")
+    FLAGS['pause'] = False
 
 try:
-    from multiprocessing import Process
-    p = Process(target=show_status, args=(sf,))
+    global FLAGS
+    FLAGS = {'pause': False, 'wait': False, 'end': False}
+    p = Thread(target=show_status, args=(sf,))
     p.start()
 #     sf.play_random_file()
     while True:
@@ -197,12 +229,14 @@ try:
            sf.set_volume(vol)
        elif cmd[0] == "list":
            sf.list(cmd[1])
+           pause_status_until_enter()
        elif cmd[0] == "play":
            sf.play(cmd[1])
        elif cmd[0] == "stop":
            sf.stop()
        elif cmd[0] == "queue":
            sf.queue(cmd[1])
+           pause_status_until_enter()
        elif cmd[0] == "clear":
            sf.clear()
        elif cmd[0] == "resume":
@@ -215,14 +249,8 @@ try:
            print("Unknown command: '"+ keys+ "'.")
 except KeyboardInterrupt:
     print("Exiting.")
-except:
-    raise
+    FLAGS['end'] = True
 finally:
-    sf.stop()
+    #sf.stop()
     daemon.terminate()
     p.join()
-
-sf.stop()
-daemon.terminate()
-p.join()
-
